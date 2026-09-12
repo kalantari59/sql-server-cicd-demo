@@ -1,0 +1,84 @@
+name: SQL Server CI/CD
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    name: Validate SQL Project
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check repository structure
+        shell: powershell
+        run: |
+          Write-Host "Checking SQL project structure..."
+
+          $requiredPaths = @(
+            "database/tables",
+            "database/views",
+            "database/procedures",
+            "database/seed",
+            "database/deploy",
+            "scripts",
+            "tests"
+          )
+
+          foreach ($path in $requiredPaths) {
+              if (-not (Test-Path $path)) {
+                  Write-Error "Required path is missing: $path"
+              }
+
+              Write-Host "PASS: $path exists"
+          }
+
+      - name: Check SQL files
+        shell: powershell
+        run: |
+          Write-Host "Checking SQL files..."
+
+          $sqlFiles = Get-ChildItem -Path database -Filter *.sql -Recurse
+
+          if ($sqlFiles.Count -eq 0) {
+              Write-Error "No SQL files were found."
+          }
+
+          Write-Host "Found $($sqlFiles.Count) SQL files."
+
+          foreach ($file in $sqlFiles) {
+              Write-Host "Found: $($file.FullName)"
+          }
+
+      - name: Check PowerShell scripts
+        shell: powershell
+        run: |
+          $scripts = @(
+            "scripts/deploy.ps1",
+            "scripts/validate-schema.ps1",
+            "scripts/detect-schema-drift.ps1"
+          )
+
+          foreach ($script in $scripts) {
+              if (-not (Test-Path $script)) {
+                  Write-Error "Missing script: $script"
+              }
+
+              Write-Host "PASS: $script exists"
+          }
+
+      - name: Validate SQL test file
+        shell: powershell
+        run: |
+          if (-not (Test-Path "tests/database-tests.sql")) {
+              Write-Error "Database test file is missing."
+          }
+
+          Write-Host "PASS: Database test file exists"

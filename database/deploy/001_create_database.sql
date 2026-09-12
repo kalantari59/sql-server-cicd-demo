@@ -1,0 +1,4 @@
+IF DB_ID(N'HealthcareCICD') IS NULL
+BEGIN
+    CREATE DATABASE HealthcareCICD;
+END;
