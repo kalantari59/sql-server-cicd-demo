@@ -1,0 +1,10 @@
+.env
+*.bak
+*.mdf
+*.ndf
+*.ldf
+*.log
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
