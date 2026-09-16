@@ -86,7 +86,6 @@ jobs:
       # ======================================================
       # 6. Verify DACPAC
       # ======================================================
-
       - name: Verify DACPAC
         shell: powershell
         run: |
@@ -97,8 +96,11 @@ jobs:
               exit 1
           }
 
-          Write-Host "DACPAC generated successfully:"
+          Write-Host "DACPAC found:"
           Write-Host $dacpac
+
+          $size = (Get-Item $dacpac).Length
+          Write-Host "DACPAC size: $size bytes"
       # ======================================================
       # Temporary SQL Connection Test
       # ======================================================
