@@ -11,6 +11,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
 
     steps:
+
       # ======================================================
       # 1. Checkout repository
       # ======================================================
@@ -18,12 +19,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
       # ======================================================
       # 2. Setup MSBuild
       # ======================================================
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+
 
       # ======================================================
       # 3. Verify SQL Database Project
@@ -42,6 +45,7 @@ jobs:
           Write-Host "SQL project found:"
           Write-Host $project
 
+
       # ======================================================
       # 4. Verify SqlPackage
       # ======================================================
@@ -55,6 +59,9 @@ jobs:
               Write-Error "SqlPackage is not available."
               exit 1
           }
+
+          Write-Host "SqlPackage is available."
+
 
       # ======================================================
       # 5. Build SQL Database Project
@@ -75,6 +82,7 @@ jobs:
 
           Write-Host "SQL Database Project build succeeded."
 
+
       # ======================================================
       # 6. Verify DACPAC
       # ======================================================
@@ -92,14 +100,15 @@ jobs:
           Write-Host "DACPAC generated successfully:"
           Write-Host $dacpac
 
+
       # ======================================================
       # 7. Detect Schema Drift
       #
-      # Expected exit codes from detect-schema-drift.ps1:
+      # Exit codes from detect-schema-drift.ps1:
       #
       #   0  = No drift
       #   10 = Drift detected
-      #   1  = Detection error
+      #   1  = Technical error
       # ======================================================
 
       - name: Detect schema drift
@@ -131,34 +140,12 @@ jobs:
           "status=ERROR" >> $env:GITHUB_OUTPUT
           exit 0
 
-      - name: Handle schema drift
-        if: steps.drift.outputs.status == 'DRIFT'
-        shell: powershell
-        run: |
-          Write-Error "SCHEMA DRIFT DETECTED."
-          Write-Error "Deployment stopped before DACPAC publish."
-          exit 1
-
-      - name: Handle drift detection error
-        if: steps.drift.outputs.status == 'ERROR'
-        shell: powershell
-        run: |
-          Write-Error "Schema drift detection failed because of a technical error."
-          Write-Error "Deployment stopped."
-          exit 1
-
-      - name: Continue after clean drift check
-        if: steps.drift.outputs.status == 'CLEAN'
-        shell: powershell
-        run: |
-          Write-Host "No schema drift detected."
-          Write-Host "Continuing with deployment."
 
       # ======================================================
-      # 8. Handle Schema Drift
+      # 8. Log Schema Drift
       # ======================================================
 
-      - name: Handle schema drift
+      - name: Log schema drift
         if: steps.drift.outputs.status == 'DRIFT'
         continue-on-error: true
         shell: powershell
@@ -205,23 +192,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               Write-Warning "Could not write DRIFT_DETECTED deployment log."
           }
+          else {
+              Write-Host "DRIFT_DETECTED deployment log written successfully."
+          }
+
 
       # ======================================================
-      # 9. Stop Pipeline When Drift Is Detected
+      # 9. Stop When Drift Is Detected
       # ======================================================
 
       - name: Stop because schema drift was detected
         if: steps.drift.outputs.status == 'DRIFT'
         shell: powershell
         run: |
-          Write-Error "Deployment blocked because schema drift was detected."
+          Write-Error "SCHEMA DRIFT DETECTED."
+          Write-Error "Deployment blocked before DACPAC publish."
           exit 1
 
+
       # ======================================================
-      # 10. Handle Drift Detection Error
+      # 10. Stop When Drift Detection Has Technical Error
       # ======================================================
 
-      - name: Handle drift detection error
+      - name: Stop because drift detection failed
         if: steps.drift.outputs.status == 'ERROR'
         shell: powershell
         run: |
@@ -229,8 +222,21 @@ jobs:
           Write-Error "Deployment will not continue."
           exit 1
 
+
       # ======================================================
-      # 11. Generate Deployment Report
+      # 11. Continue When Database Is Clean
+      # ======================================================
+
+      - name: Continue after clean drift check
+        if: steps.drift.outputs.status == 'CLEAN'
+        shell: powershell
+        run: |
+          Write-Host "No schema drift detected."
+          Write-Host "Continuing with deployment."
+
+
+      # ======================================================
+      # 12. Generate Deployment Report
       # ======================================================
 
       - name: Generate deployment report
@@ -275,8 +281,9 @@ jobs:
 
           Write-Host "Deployment report generated successfully."
 
+
       # ======================================================
-      # 12. Deploy DACPAC
+      # 13. Deploy DACPAC
       # ======================================================
 
       - name: Deploy DACPAC
@@ -314,8 +321,9 @@ jobs:
 
           Write-Host "DACPAC deployment completed successfully."
 
+
       # ======================================================
-      # 13. Run Database Tests
+      # 14. Run Database Tests
       # ======================================================
 
       - name: Run database tests
@@ -349,8 +357,9 @@ jobs:
 
           Write-Host "Database tests passed."
 
+
       # ======================================================
-      # 14. Log Successful Deployment
+      # 15. Log Successful Deployment
       # ======================================================
 
       - name: Log successful deployment
@@ -402,11 +411,12 @@ jobs:
 
           Write-Host "Successful deployment logged."
 
+
       # ======================================================
-      # 15. Log Failed Deployment
+      # 16. Log Failed Deployment
       #
-      # Runs only for actual deployment/test failures.
-      # It does NOT run for DRIFT_DETECTED.
+      # This is for actual deployment/test failures.
+      # DRIFT_DETECTED has its own log and is excluded here.
       # ======================================================
 
       - name: Log failed deployment
@@ -454,7 +464,7 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
               Write-Warning "Could not write failed deployment log."
-              exit 1
           }
-
-          Write-Host "Failed deployment logged."
+          else {
+              Write-Host "Failed deployment logged."
+          }
