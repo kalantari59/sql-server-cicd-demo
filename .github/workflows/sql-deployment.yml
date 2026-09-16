@@ -89,40 +89,39 @@ jobs:
       - name: Verify DACPAC
         shell: powershell
         run: |
-          $expected = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
-
-          Write-Host "Expected DACPAC path:"
-          Write-Host $expected
-
-          Write-Host ""
-          Write-Host "Searching for DACPAC files..."
+          Write-Host "Searching for generated DACPAC..."
 
           $dacpacs = Get-ChildItem `
-            -Path "database/project" `
-            -Filter "*.dacpac" `
+            -Path "database/project/HealthcareCICD.Database" `
+            -Filter "HealthcareCICD.Database.dacpac" `
             -Recurse `
+            -File `
             -ErrorAction SilentlyContinue
 
           if ($dacpacs.Count -eq 0) {
-              Write-Error "No DACPAC file was found under database/project."
+              Write-Error "HealthcareCICD.Database.dacpac was not generated."
               exit 1
           }
 
-          Write-Host ""
-          Write-Host "DACPAC files found:"
+          if ($dacpacs.Count -gt 1) {
+              Write-Host "Multiple DACPAC files found:"
+              foreach ($file in $dacpacs) {
+                  Write-Host " - $($file.FullName)"
+              }
 
-          foreach ($file in $dacpacs) {
-              Write-Host " - $($file.FullName)"
-              Write-Host "   Size: $($file.Length) bytes"
+              $dacpac = $dacpacs |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -First 1
+          }
+          else {
+              $dacpac = $dacpacs[0]
           }
 
-          if (-not (Test-Path $expected)) {
-              Write-Error "Expected DACPAC was not found: $expected"
-              exit 1
-          }
+          Write-Host "DACPAC found:"
+          Write-Host $dacpac.FullName
+          Write-Host "Size: $($dacpac.Length) bytes"
 
-          Write-Host ""
-          Write-Host "Expected DACPAC found successfully."
+          "DACPAC_PATH=$($dacpac.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
       # ======================================================
       # Temporary SQL Connection Test
       # ======================================================
