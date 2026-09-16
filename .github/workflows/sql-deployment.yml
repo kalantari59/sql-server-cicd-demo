@@ -169,11 +169,12 @@ jobs:
           SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
         run: |
           .\scripts\detect-schema-drift.ps1 `
-            -Server $env:SQL_SERVER `
-            -Database $env:SQL_DATABASE `
-            -DacpacPath $env:DACPAC_PATH `
+            -Server "${{ secrets.SQL_SERVER }}" `
+            -Database "${{ secrets.SQL_DATABASE }}" `
+            -DacpacPath "$env:DACPAC_PATH" `
             -OutputPath "drift-report.xml" `
             -DeployScriptPath "current-deploy.sql"
+
           $exitCode = $LASTEXITCODE
 
           Write-Host "Schema drift script exit code: $exitCode"
@@ -332,7 +333,6 @@ jobs:
 
           Write-Host "Deployment report generated successfully."
 
-
       # ======================================================
       # 13. Deploy DACPAC
       # ======================================================
@@ -344,7 +344,7 @@ jobs:
           SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
           SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
         run: |
-          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
+          $dacpac = $env:DACPAC_PATH
 
           if (-not (Test-Path $dacpac)) {
               Write-Error "DACPAC not found: $dacpac"
@@ -352,6 +352,7 @@ jobs:
           }
 
           Write-Host "Deploying DACPAC..."
+          Write-Host "DACPAC: $dacpac"
 
           sqlpackage `
             /Action:Publish `
@@ -371,7 +372,6 @@ jobs:
           }
 
           Write-Host "DACPAC deployment completed successfully."
-
 
       # ======================================================
       # 14. Run Database Tests
