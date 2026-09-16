@@ -2,6 +2,7 @@
     [PatientId]   INT            IDENTITY (1, 1) NOT NULL,
     [FirstName]   NVARCHAR (50)  NOT NULL,
     PhoneNumber NVARCHAR(30) NULL,
+    EmergencyContact NVARCHAR(100) NULL,
     [LastName]    NVARCHAR (50)  NOT NULL,
     [DateOfBirth] DATE           NOT NULL,
     [Email]       NVARCHAR (255) NULL,

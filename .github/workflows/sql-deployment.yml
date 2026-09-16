@@ -6,17 +6,32 @@ on:
       - main
 
 jobs:
+
   build:
-    name: Build SQL Database Project
+    name: Build and Deploy SQL Database
     runs-on: [self-hosted, Windows, X64]
 
     steps:
 
+      # ======================================================
+      # Checkout
+      # ======================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # ======================================================
+      # Setup MSBuild
+      # ======================================================
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
+
+
+      # ======================================================
+      # Verify SQL Project
+      # ======================================================
 
       - name: Verify SQL Project
         shell: powershell
@@ -31,6 +46,26 @@ jobs:
           Write-Host "SQL project found:"
           Write-Host $project
 
+
+      # ======================================================
+      # Verify SqlPackage
+      # ======================================================
+
+      - name: Verify SqlPackage
+        shell: powershell
+        run: |
+          sqlpackage /Version
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "SqlPackage is not available."
+              exit 1
+          }
+
+
+      # ======================================================
+      # Build DACPAC
+      # ======================================================
+
       - name: Build SQL Database Project
         shell: powershell
         run: |
@@ -43,6 +78,11 @@ jobs:
               Write-Error "SQL Database Project build failed."
               exit 1
           }
+
+
+      # ======================================================
+      # Verify DACPAC
+      # ======================================================
 
       - name: Verify DACPAC
         shell: powershell
@@ -57,47 +97,84 @@ jobs:
           Write-Host "DACPAC generated successfully:"
           Write-Host $dacpac
 
+
+      # ======================================================
+      # Detect Schema Drift
+      # ======================================================
+
       - name: Detect schema drift
+        id: drift
         shell: powershell
         env:
           SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
           SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
         run: |
-          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
-
-          Write-Host "Checking DACPAC:"
-          Write-Host $dacpac
-
-          if (-not (Test-Path $dacpac)) {
-              Write-Error "DACPAC not found: $dacpac"
-              exit 1
-          }
 
           .\scripts\detect-schema-drift.ps1 `
             -Server "${{ secrets.SQL_SERVER }}" `
-            -Database "${{ secrets.SQL_DATABASE }}" `
-            -DacpacPath $dacpac
+            -Database "${{ secrets.SQL_DATABASE }}"
 
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "Schema drift detected or drift detection failed."
+              Write-Error "Schema drift detected."
               exit 1
           }
 
-      - name: Deploy DACPAC
+
+      # ======================================================
+      # Generate Deployment Report
+      # ======================================================
+
+      - name: Generate deployment report
         shell: powershell
         env:
           SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
           SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
         run: |
-          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
 
-          if (-not (Test-Path $dacpac)) {
-              Write-Error "DACPAC not found: $dacpac"
+          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
+          $report = "deploy-report.xml"
+
+          if (Test-Path $report) {
+              Remove-Item $report -Force
+          }
+
+          sqlpackage `
+            /Action:DeployReport `
+            /SourceFile:"$dacpac" `
+            /TargetServerName:"${{ secrets.SQL_SERVER }}" `
+            /TargetDatabaseName:"${{ secrets.SQL_DATABASE }}" `
+            /TargetUser:"$env:SQL_USERNAME" `
+            /TargetPassword:"$env:SQL_PASSWORD" `
+            /TargetTrustServerCertificate:True `
+            /OutputPath:"$report"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "DeployReport generation failed."
               exit 1
           }
 
-          Write-Host "Deploying DACPAC:"
-          Write-Host $dacpac
+          if (-not (Test-Path $report)) {
+              Write-Error "DeployReport was not created."
+              exit 1
+          }
+
+          Write-Host "Deployment report generated:"
+          Write-Host $report
+
+
+      # ======================================================
+      # Deploy DACPAC
+      # ======================================================
+
+      - name: Deploy DACPAC
+        id: deploy
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+
+          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
 
           sqlpackage `
             /Action:Publish `
@@ -106,7 +183,10 @@ jobs:
             /TargetDatabaseName:"${{ secrets.SQL_DATABASE }}" `
             /TargetUser:"$env:SQL_USERNAME" `
             /TargetPassword:"$env:SQL_PASSWORD" `
-            /TargetTrustServerCertificate:True
+            /TargetTrustServerCertificate:True `
+            /p:RegisterDataTierApplication=True `
+            /p:BlockWhenDriftDetected=True `
+            /p:BlockOnPossibleDataLoss=True
 
           if ($LASTEXITCODE -ne 0) {
               Write-Error "DACPAC deployment failed."
@@ -114,3 +194,145 @@ jobs:
           }
 
           Write-Host "DACPAC deployment completed successfully."
+
+
+      # ======================================================
+      # Database Tests
+      # ======================================================
+
+      - name: Run database tests
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+          SQLCMDPASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+
+          if (-not (Test-Path "tests/database-tests.sql")) {
+              Write-Error "Database test file not found."
+              exit 1
+          }
+
+          $env:SQLCMDPASSWORD = $env:SQL_PASSWORD
+
+          sqlcmd `
+            -S "${{ secrets.SQL_SERVER }}" `
+            -d "${{ secrets.SQL_DATABASE }}" `
+            -U "$env:SQL_USERNAME" `
+            -C `
+            -b `
+            -i "tests/database-tests.sql"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Database tests failed."
+              exit 1
+          }
+
+          Write-Host "Database tests passed."
+
+
+      # ======================================================
+      # Deployment Log
+      # ======================================================
+
+      - name: Log successful deployment
+        if: success()
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+          SQLCMDPASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+
+          $env:SQLCMDPASSWORD = $env:SQL_PASSWORD
+
+          $commitSha = "${{ github.sha }}"
+          $environment = "Development"
+
+          $query = @"
+          INSERT INTO dbo.DeploymentLog
+          (
+              DeploymentDate,
+              CommitSha,
+              Environment,
+              Status,
+              ExecutedBy,
+              ErrorMessage
+          )
+          VALUES
+          (
+              SYSUTCDATETIME(),
+              '$commitSha',
+              '$environment',
+              'SUCCESS',
+              SUSER_SNAME(),
+              NULL
+          );
+          "@
+
+          sqlcmd `
+            -S "${{ secrets.SQL_SERVER }}" `
+            -d "${{ secrets.SQL_DATABASE }}" `
+            -U "$env:SQL_USERNAME" `
+            -C `
+            -b `
+            -Q "$query"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to write successful deployment log."
+              exit 1
+          }
+
+          Write-Host "Deployment success logged."
+
+
+      # ======================================================
+      # Log failed deployment
+      # ======================================================
+
+      - name: Log failed deployment
+        if: failure()
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+          SQLCMDPASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+
+          $env:SQLCMDPASSWORD = $env:SQL_PASSWORD
+
+          $commitSha = "${{ github.sha }}"
+          $environment = "Development"
+
+          $query = @"
+          INSERT INTO dbo.DeploymentLog
+          (
+              DeploymentDate,
+              CommitSha,
+              Environment,
+              Status,
+              ExecutedBy,
+              ErrorMessage
+          )
+          VALUES
+          (
+              SYSUTCDATETIME(),
+              '$commitSha',
+              '$environment',
+              'FAILED',
+              SUSER_SNAME(),
+              'GitHub Actions deployment failed. Check workflow logs for details.'
+          );
+          "@
+
+          sqlcmd `
+            -S "${{ secrets.SQL_SERVER }}" `
+            -d "${{ secrets.SQL_DATABASE }}" `
+            -U "$env:SQL_USERNAME" `
+            -C `
+            -b `
+            -Q "$query"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Warning "Could not write failed deployment log."
+          }

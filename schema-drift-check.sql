@@ -40,6 +40,121 @@ USE [$(DatabaseName)];
 
 
 GO
+PRINT N'Dropping Default Constraint [dbo].[DF_Patients_IsActive]...';
+
+
+GO
+ALTER TABLE [dbo].[Patients] DROP CONSTRAINT [DF_Patients_IsActive];
+
+
+GO
+PRINT N'Dropping Foreign Key [dbo].[FK_Appointments_Patients]...';
+
+
+GO
+ALTER TABLE [dbo].[Appointments] DROP CONSTRAINT [FK_Appointments_Patients];
+
+
+GO
+PRINT N'Starting rebuilding table [dbo].[Patients]...';
+
+
+GO
+BEGIN TRANSACTION;
+
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+SET XACT_ABORT ON;
+
+CREATE TABLE [dbo].[tmp_ms_xx_Patients] (
+    [PatientId]   INT            IDENTITY (1, 1) NOT NULL,
+    [FirstName]   NVARCHAR (50)  NOT NULL,
+    [PhoneNumber] NVARCHAR (30)  NULL,
+    [LastName]    NVARCHAR (50)  NOT NULL,
+    [DateOfBirth] DATE           NOT NULL,
+    [Email]       NVARCHAR (255) NULL,
+    [IsActive]    BIT            CONSTRAINT [DF_Patients_IsActive] DEFAULT ((1)) NOT NULL,
+    CONSTRAINT [tmp_ms_xx_constraint_PK_Patients1] PRIMARY KEY CLUSTERED ([PatientId] ASC)
+);
+
+IF EXISTS (SELECT TOP 1 1 
+           FROM   [dbo].[Patients])
+    BEGIN
+        SET IDENTITY_INSERT [dbo].[tmp_ms_xx_Patients] ON;
+        INSERT INTO [dbo].[tmp_ms_xx_Patients] ([PatientId], [FirstName], [LastName], [DateOfBirth], [Email], [IsActive])
+        SELECT   [PatientId],
+                 [FirstName],
+                 [LastName],
+                 [DateOfBirth],
+                 [Email],
+                 [IsActive]
+        FROM     [dbo].[Patients]
+        ORDER BY [PatientId] ASC;
+        SET IDENTITY_INSERT [dbo].[tmp_ms_xx_Patients] OFF;
+    END
+
+DROP TABLE [dbo].[Patients];
+
+EXECUTE sp_rename N'[dbo].[tmp_ms_xx_Patients]', N'Patients';
+
+EXECUTE sp_rename N'[dbo].[tmp_ms_xx_constraint_PK_Patients1]', N'PK_Patients', N'OBJECT';
+
+COMMIT TRANSACTION;
+
+SET TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+
+GO
+PRINT N'Creating Index [dbo].[Patients].[IX_Patients_LastName]...';
+
+
+GO
+CREATE NONCLUSTERED INDEX [IX_Patients_LastName]
+    ON [dbo].[Patients]([LastName] ASC);
+
+
+GO
+PRINT N'Creating Foreign Key [dbo].[FK_Appointments_Patients]...';
+
+
+GO
+WAITFOR DELAY '00:00.010';
+
+ALTER TABLE [dbo].[Appointments] WITH NOCHECK
+    ADD CONSTRAINT [FK_Appointments_Patients] FOREIGN KEY ([PatientId]) REFERENCES [dbo].[Patients] ([PatientId]);
+
+
+GO
+PRINT N'Refreshing View [dbo].[vw_UpcomingAppointments]...';
+
+
+GO
+SET ANSI_NULLS ON;
+
+SET QUOTED_IDENTIFIER OFF;
+
+
+GO
+EXECUTE sp_refreshsqlmodule N'[dbo].[vw_UpcomingAppointments]';
+
+
+GO
+SET ANSI_NULLS, QUOTED_IDENTIFIER ON;
+
+
+GO
+PRINT N'Checking existing data against newly created constraints';
+
+
+GO
+USE [$(DatabaseName)];
+
+
+GO
+ALTER TABLE [dbo].[Appointments] WITH CHECK CHECK CONSTRAINT [FK_Appointments_Patients];
+
+
+GO
 PRINT N'Update complete.';
 
 

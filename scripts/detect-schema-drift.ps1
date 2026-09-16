@@ -4,146 +4,172 @@ param(
 
     [string]$Database = "HealthcareCICD",
 
-    [string]$DacpacPath = "",
-
     [string]$OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 
+# ============================================================
+# SQL Server Schema Drift Detection
+#
+# IMPORTANT:
+# This script does NOT compare the current Git DACPAC against
+# the live database.
+#
+# It uses SqlPackage DriftReport to detect changes made to the
+# registered database since the last successful registration.
+#
+# This allows intentional Git changes to proceed while still
+# detecting manual database changes.
+# ============================================================
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-# Default DACPAC path
-if ([string]::IsNullOrWhiteSpace($DacpacPath)) {
-    $DacpacPath = Join-Path `
-        $ProjectRoot `
-        "database\project\HealthcareCICD.Database\bin\Debug\HealthcareCICD.Database.dacpac"
-}
+# ------------------------------------------------------------
+# Default DriftReport path
+# ------------------------------------------------------------
 
-# Default deployment plan output
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+
     $OutputPath = Join-Path `
         $ProjectRoot `
-        "schema-drift-check.sql"
+        "drift-report.xml"
 }
+
+# ------------------------------------------------------------
+# Display configuration
+# ------------------------------------------------------------
 
 Write-Host "========================================"
 Write-Host "SQL Server Schema Drift Detection"
 Write-Host "========================================"
 Write-Host "Server:   $Server"
 Write-Host "Database: $Database"
-Write-Host "DACPAC:   $DacpacPath"
+Write-Host "Report:   $OutputPath"
 Write-Host ""
 
-# Validate DACPAC
-if (-not (Test-Path $DacpacPath)) {
-    Write-Error "DACPAC not found: $DacpacPath"
-    exit 1
-}
-
+# ------------------------------------------------------------
 # Validate SqlPackage
+# ------------------------------------------------------------
+
 if (-not (Get-Command sqlpackage -ErrorAction SilentlyContinue)) {
+
     Write-Error "SqlPackage was not found in PATH."
     exit 1
 }
 
-# Validate SQL credentials
+Write-Host "SqlPackage found."
+Write-Host ""
+
+# ------------------------------------------------------------
+# Validate credentials
+# ------------------------------------------------------------
+
 if ([string]::IsNullOrWhiteSpace($env:SQL_USERNAME)) {
+
     Write-Error "SQL_USERNAME environment variable is not set."
     exit 1
 }
 
 if ([string]::IsNullOrWhiteSpace($env:SQL_PASSWORD)) {
+
     Write-Error "SQL_PASSWORD environment variable is not set."
     exit 1
 }
 
-Write-Host "Generating deployment plan..."
+Write-Host "SQL credentials are available."
+Write-Host ""
 
-$TargetConnectionString = `
-    "Server=$Server;Database=$Database;User ID=$env:SQL_USERNAME;Password=$env:SQL_PASSWORD;TrustServerCertificate=True"
+# ------------------------------------------------------------
+# Remove old report
+# ------------------------------------------------------------
+
+if (Test-Path $OutputPath) {
+
+    Remove-Item $OutputPath -Force
+}
+
+# ------------------------------------------------------------
+# Generate DriftReport
+# ------------------------------------------------------------
+
+Write-Host "Generating SQL Server DriftReport..."
+Write-Host ""
 
 sqlpackage `
-    /Action:Script `
-    /SourceFile:"$DacpacPath" `
-    /TargetConnectionString:"$TargetConnectionString" `
-    /DeployScriptPath:"$OutputPath"
+    /Action:DriftReport `
+    /TargetServerName:"$Server" `
+    /TargetDatabaseName:"$Database" `
+    /TargetUser:"$env:SQL_USERNAME" `
+    /TargetPassword:"$env:SQL_PASSWORD" `
+    /TargetTrustServerCertificate:True `
+    /OutputPath:"$OutputPath"
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "SqlPackage failed while generating the deployment plan."
+
+    Write-Error @"
+SqlPackage DriftReport failed.
+
+The database may not be registered as a Data-tier Application.
+
+Run the bootstrap registration procedure before using
+automated drift detection.
+"@
+
     exit 1
 }
 
-Write-Host ""
-Write-Host "Deployment plan generated:"
-Write-Host $OutputPath
+# ------------------------------------------------------------
+# Validate report
+# ------------------------------------------------------------
 
-# Validate deployment plan
 if (-not (Test-Path $OutputPath)) {
-    Write-Error "Deployment plan was not created."
+
+    Write-Error "DriftReport was not created."
     exit 1
 }
 
-$PlanContent = Get-Content $OutputPath -Raw
+$ReportContent = Get-Content $OutputPath -Raw
 
-# Schema-related changes that should be treated as drift
-$SchemaPatterns = @(
-    "CREATE TABLE",
-    "ALTER TABLE",
-    "DROP TABLE",
-    "CREATE VIEW",
-    "ALTER VIEW",
-    "DROP VIEW",
-    "CREATE PROCEDURE",
-    "ALTER PROCEDURE",
-    "DROP PROCEDURE",
-    "CREATE FUNCTION",
-    "ALTER FUNCTION",
-    "DROP FUNCTION",
-    "ADD CONSTRAINT",
-    "DROP CONSTRAINT"
-)
+# ------------------------------------------------------------
+# No drift
+#
+# SqlPackage creates an empty report when there are no
+# changes since the last registration.
+# ------------------------------------------------------------
 
-$SchemaChanges = @()
+if ([string]::IsNullOrWhiteSpace($ReportContent)) {
 
-foreach ($Pattern in $SchemaPatterns) {
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "NO SCHEMA DRIFT DETECTED" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
 
-    $Matches = Select-String `
-        -InputObject $PlanContent `
-        -Pattern $Pattern `
-        -AllMatches
+    Write-Host ""
+    Write-Host "The registered database has not changed"
+    Write-Host "since the last successful registration."
+    Write-Host ""
 
-    if ($Matches) {
-        $SchemaChanges += $Pattern
-    }
+    exit 0
 }
+
+# ------------------------------------------------------------
+# Drift detected
+# ------------------------------------------------------------
+
+Write-Host "========================================" -ForegroundColor Red
+Write-Host "SCHEMA DRIFT DETECTED" -ForegroundColor Red
+Write-Host "========================================" -ForegroundColor Red
 
 Write-Host ""
+Write-Host "The database has changed since the last"
+Write-Host "registered deployment."
+Write-Host ""
 
-if ($SchemaChanges.Count -gt 0) {
+Write-Host "Drift report:"
+Write-Host $OutputPath
+Write-Host ""
 
-    Write-Host "========================================" -ForegroundColor Red
-    Write-Host "SCHEMA DRIFT DETECTED" -ForegroundColor Red
-    Write-Host "========================================"
+Write-Host "CI/CD deployment will stop."
+Write-Host ""
 
-    Write-Host ""
-    Write-Host "Schema changes found in the deployment plan:"
-
-    foreach ($Change in $SchemaChanges) {
-        Write-Host "  - $Change" -ForegroundColor Yellow
-    }
-
-    Write-Host ""
-    Write-Host "The actual SQL Server schema differs from the DACPAC."
-    Write-Host "CI/CD deployment should stop."
-
-    exit 1
-}
-
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "NO SCHEMA DRIFT DETECTED" -ForegroundColor Green
-Write-Host "========================================"
-
-Write-Host "The actual SQL Server schema matches the DACPAC."
-
-exit 0
+exit 1
