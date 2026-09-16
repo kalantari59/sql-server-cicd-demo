@@ -25,6 +25,7 @@ jobs:
 
           if (-not (Test-Path $project)) {
               Write-Error "SQL Database Project not found: $project"
+              exit 1
           }
 
           Write-Host "SQL project found:"
@@ -38,6 +39,11 @@ jobs:
             /p:Configuration=Debug `
             /p:Platform="Any CPU"
 
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "SQL Database Project build failed."
+              exit 1
+          }
+
       - name: Verify DACPAC
         shell: powershell
         run: |
@@ -45,6 +51,7 @@ jobs:
 
           if (-not (Test-Path $dacpac)) {
               Write-Error "DACPAC was not generated: $dacpac"
+              exit 1
           }
 
           Write-Host "DACPAC generated successfully:"
@@ -63,31 +70,19 @@ jobs:
 
           if (-not (Test-Path $dacpac)) {
               Write-Error "DACPAC not found: $dacpac"
+              exit 1
           }
 
           .\scripts\detect-schema-drift.ps1 `
             -Server "${{ secrets.SQL_SERVER }}" `
             -Database "${{ secrets.SQL_DATABASE }}" `
             -DacpacPath $dacpac
-      
-      - name: Verify deployment permissions
-        shell: powershell
-        env:
-          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
-          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
-        run: |
-          $env:SQLCMDPASSWORD = $env:SQL_PASSWORD
-
-          sqlcmd `
-            -S "${{ secrets.SQL_SERVER }}" `
-            -d "${{ secrets.SQL_DATABASE }}" `
-            -U "$env:SQL_USERNAME" `
-            -Q "SELECT SUSER_SNAME() AS LoginName, USER_NAME() AS DatabaseUser, DB_NAME() AS DatabaseName, IS_SRVROLEMEMBER('sysadmin') AS IsSysAdmin, IS_MEMBER('db_owner') AS IsDbOwner;"
 
           if ($LASTEXITCODE -ne 0) {
-              Write-Error "SQL authentication or connectivity test failed."
+              Write-Error "Schema drift detected or drift detection failed."
               exit 1
           }
+
       - name: Deploy DACPAC
         shell: powershell
         env:
@@ -118,4 +113,4 @@ jobs:
               exit 1
           }
 
-          Write-Host "DACPAC deployment completed successfully."         
+          Write-Host "DACPAC deployment completed successfully."

@@ -13,14 +13,14 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
-# Default DACPAC location
+# Default DACPAC path
 if ([string]::IsNullOrWhiteSpace($DacpacPath)) {
     $DacpacPath = Join-Path `
         $ProjectRoot `
-        "database\project\HealthcareCICD.Database\HealthcareCICD.Database\bin\Debug\HealthcareCICD.Database.dacpac"
+        "database\project\HealthcareCICD.Database\bin\Debug\HealthcareCICD.Database.dacpac"
 }
 
-# Default deployment plan location
+# Default deployment plan output
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path `
         $ProjectRoot `
@@ -35,28 +35,33 @@ Write-Host "Database: $Database"
 Write-Host "DACPAC:   $DacpacPath"
 Write-Host ""
 
-# --------------------------------------------------
-# Step 1 - Validate prerequisites
-# --------------------------------------------------
-
+# Validate DACPAC
 if (-not (Test-Path $DacpacPath)) {
     Write-Error "DACPAC not found: $DacpacPath"
     exit 1
 }
 
+# Validate SqlPackage
 if (-not (Get-Command sqlpackage -ErrorAction SilentlyContinue)) {
     Write-Error "SqlPackage was not found in PATH."
     exit 1
 }
 
-# --------------------------------------------------
-# Step 2 - Generate deployment plan
-# --------------------------------------------------
+# Validate SQL credentials
+if ([string]::IsNullOrWhiteSpace($env:SQL_USERNAME)) {
+    Write-Error "SQL_USERNAME environment variable is not set."
+    exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($env:SQL_PASSWORD)) {
+    Write-Error "SQL_PASSWORD environment variable is not set."
+    exit 1
+}
 
 Write-Host "Generating deployment plan..."
 
 $TargetConnectionString = `
-    "Server=$Server;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
+    "Server=$Server;Database=$Database;User ID=$env:SQL_USERNAME;Password=$env:SQL_PASSWORD;TrustServerCertificate=True"
 
 sqlpackage `
     /Action:Script `
@@ -73,10 +78,7 @@ Write-Host ""
 Write-Host "Deployment plan generated:"
 Write-Host $OutputPath
 
-# --------------------------------------------------
-# Step 3 - Read deployment plan
-# --------------------------------------------------
-
+# Validate deployment plan
 if (-not (Test-Path $OutputPath)) {
     Write-Error "Deployment plan was not created."
     exit 1
@@ -84,10 +86,7 @@ if (-not (Test-Path $OutputPath)) {
 
 $PlanContent = Get-Content $OutputPath -Raw
 
-# --------------------------------------------------
-# Step 4 - Detect actual schema changes
-# --------------------------------------------------
-
+# Schema-related changes that should be treated as drift
 $SchemaPatterns = @(
     "CREATE TABLE",
     "ALTER TABLE",
@@ -118,10 +117,6 @@ foreach ($Pattern in $SchemaPatterns) {
         $SchemaChanges += $Pattern
     }
 }
-
-# --------------------------------------------------
-# Step 5 - Return CI/CD result
-# --------------------------------------------------
 
 Write-Host ""
 

@@ -12,7 +12,7 @@
 		</CustomData>
 		<CustomData Category="Reference" Type="Assembly">
 			<Metadata Name="LogicalName" Value="HealthcareCICD.Database.dll" />
-			<Metadata Name="FileName" Value="F:\INTERVIEW\3ATTRA\SQL-SERVER-CICD-DEMO\SQL-SERVER-CICD-DEMO\DATABASE\PROJECT\HEALTHCARECICD.DATABASE\HEALTHCARECICD.DATABASE\OBJ\DEBUG\HEALTHCARECICD.DATABASE.DLL" />
+			<Metadata Name="FileName" Value="F:\INTERVIEW\3ATTRA\SQL-SERVER-CICD-DEMO\SQL-SERVER-CICD-DEMO\DATABASE\PROJECT\HEALTHCARECICD.DATABASE\OBJ\DEBUG\HEALTHCARECICD.DATABASE.DLL" />
 			<Metadata Name="AssemblyName" Value="HealthcareCICD.Database" />
 			<Metadata Name="PermissionSet" Value="SAFE" />
 			<Metadata Name="Owner" Value="" />
@@ -20,7 +20,7 @@
 			<Metadata Name="IsVisible" Value="True" />
 			<Metadata Name="IsModelAware" Value="True" />
 			<Metadata Name="SkipCreationIfEmpty" Value="True" />
-			<Metadata Name="AssemblySymbolsName" Value="F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\HealthcareCICD.Database\obj\Debug\HealthcareCICD.Database.pdb" />
+			<Metadata Name="AssemblySymbolsName" Value="F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\HealthcareCICD.Database.pdb" />
 		</CustomData>
 		<CustomData Category="SqlCmdVariables" Type="SqlCmdVariable" />
 	</Header>
@@ -804,6 +804,22 @@
 							<Entry>
 								<Element Type="SqlTypeSpecifier">
 									<Property Name="Length" Value="50" />
+									<Relationship Name="Type">
+										<Entry>
+											<References ExternalSource="BuiltIns" Name="[nvarchar]" />
+										</Entry>
+									</Relationship>
+								</Element>
+							</Entry>
+						</Relationship>
+					</Element>
+				</Entry>
+				<Entry>
+					<Element Type="SqlSimpleColumn" Name="[dbo].[Patients].[PhoneNumber]">
+						<Relationship Name="TypeSpecifier">
+							<Entry>
+								<Element Type="SqlTypeSpecifier">
+									<Property Name="Length" Value="30" />
 									<Relationship Name="Type">
 										<Entry>
 											<References ExternalSource="BuiltIns" Name="[nvarchar]" />

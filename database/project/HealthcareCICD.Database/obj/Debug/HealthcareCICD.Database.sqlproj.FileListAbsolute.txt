@@ -14,3 +14,7 @@ F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\H
 F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\HealthcareCICD.Database.sqlproj.AssemblyReference.cache
 F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\HealthcareCICD.Database.dll
 F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\HealthcareCICD.Database.pdb
+F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\Model.xml
+F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\refactor.xml
+F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\postdeploy.sql
+F:\Interview\3attra\sql-server-cicd-demo\sql-server-cicd-demo\database\project\HealthcareCICD.Database\obj\Debug\predeploy.sql
