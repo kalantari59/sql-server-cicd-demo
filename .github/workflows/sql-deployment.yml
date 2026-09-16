@@ -60,6 +60,16 @@ jobs:
           SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
           SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
         run: |
+          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
+
+          Write-Host "Checking DACPAC:"
+          Write-Host $dacpac
+
+          if (-not (Test-Path $dacpac)) {
+              Write-Error "DACPAC not found: $dacpac"
+          }
+
           .\scripts\detect-schema-drift.ps1 `
             -Server "${{ secrets.SQL_SERVER }}" `
-            -Database "${{ secrets.SQL_DATABASE }}"
+            -Database "${{ secrets.SQL_DATABASE }}" `
+            -DacpacPath $dacpac
