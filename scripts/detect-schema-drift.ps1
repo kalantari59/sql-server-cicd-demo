@@ -78,14 +78,108 @@ Write-Host "DACPAC found."
 Write-Host ""
 
 # ============================================================
-# 4. Generate DeployReport
+# 4. Generate DriftReport
 # ============================================================
 
-Write-Host "Generating SQL Server DeployReport..."
+Write-Host "Generating SQL Server DriftReport..."
 Write-Host ""
 
 if (Test-Path $OutputPath) {
     Remove-Item $OutputPath -Force
+}
+
+& sqlpackage `
+    /Action:DriftReport `
+    /TargetServerName:"$Server" `
+    /TargetDatabaseName:"$Database" `
+    /TargetUser:"$env:SQL_USERNAME" `
+    /TargetPassword:"$env:SQL_PASSWORD" `
+    /TargetTrustServerCertificate:True `
+    /OutputPath:"$OutputPath"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "SqlPackage DriftReport failed."
+    exit 1
+}
+
+Write-Host ""
+Write-Host "DriftReport generated successfully."
+Write-Host ""
+
+# ============================================================
+# 5. Read DriftReport XML
+# ============================================================
+
+[xml]$reportXml = Get-Content -Path $OutputPath -Raw
+
+$namespace = New-Object System.Xml.XmlNamespaceManager($reportXml.NameTable)
+
+$namespace.AddNamespace(
+    "d",
+    "http://schemas.microsoft.com/sqlserver/dac/DriftReport/2012/02"
+)
+
+$additions = @(
+    $reportXml.SelectNodes(
+        "//d:Additions/d:Object",
+        $namespace
+    )
+)
+
+$removals = @(
+    $reportXml.SelectNodes(
+        "//d:Removals/d:Object",
+        $namespace
+    )
+)
+
+$modifications = @(
+    $reportXml.SelectNodes(
+        "//d:Modifications/d:Object",
+        $namespace
+    )
+)
+
+$driftObjects = @($additions) + @($removals) + @($modifications)
+
+Write-Host "DriftReport summary:"
+Write-Host "  Additions found:        $($additions.Count)"
+Write-Host "  Removals found:         $($removals.Count)"
+Write-Host "  Modifications found:    $($modifications.Count)"
+Write-Host "  Total drift objects:    $($driftObjects.Count)"
+Write-Host ""
+
+# ============================================================
+# 6. CLEAN
+# ============================================================
+
+if ($driftObjects.Count -eq 0) {
+    Write-Host "========================================"
+    Write-Host "NO SCHEMA DRIFT DETECTED"
+    Write-Host "========================================"
+    Write-Host ""
+    Write-Host "The actual SQL Server schema matches"
+    Write-Host "the last registered deployment baseline."
+
+    exit 0
+}
+
+# ============================================================
+# 7. Generate DeployReport for detailed deployment diagnostics
+#
+# DriftReport above determines whether the target database has
+# changed outside the registered deployment baseline. DeployReport
+# below remains useful diagnostics for the current Git DACPAC and
+# must not be used as the drift gate.
+# ============================================================
+
+$deployReportPath = "$OutputPath.deploy-report.xml"
+
+Write-Host "Generating DeployReport for detailed deployment diagnostics..."
+Write-Host ""
+
+if (Test-Path $deployReportPath) {
+    Remove-Item $deployReportPath -Force
 }
 
 & sqlpackage `
@@ -96,41 +190,40 @@ if (Test-Path $OutputPath) {
     /TargetUser:"$env:SQL_USERNAME" `
     /TargetPassword:"$env:SQL_PASSWORD" `
     /TargetTrustServerCertificate:True `
-    /OutputPath:"$OutputPath"
+    /OutputPath:"$deployReportPath"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "SqlPackage DeployReport failed."
     exit 1
 }
 
-Write-Host ""
 Write-Host "DeployReport generated successfully."
 Write-Host ""
 
 # ============================================================
-# 5. Read DeployReport XML
+# 8. Read DeployReport XML for detailed deployment diagnostics
 # ============================================================
 
-[xml]$reportXml = Get-Content -Path $OutputPath -Raw
+[xml]$deployReportXml = Get-Content -Path $deployReportPath -Raw
 
-$namespace = New-Object System.Xml.XmlNamespaceManager($reportXml.NameTable)
+$deployNamespace = New-Object System.Xml.XmlNamespaceManager($deployReportXml.NameTable)
 
-$namespace.AddNamespace(
+$deployNamespace.AddNamespace(
     "d",
     "http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02"
 )
 
 $operations = @(
-    $reportXml.SelectNodes(
+    $deployReportXml.SelectNodes(
         "//d:Operations/d:Operation",
-        $namespace
+        $deployNamespace
     )
 )
 
 $alerts = @(
-    $reportXml.SelectNodes(
+    $deployReportXml.SelectNodes(
         "//d:Alerts/d:Alert",
-        $namespace
+        $deployNamespace
     )
 )
 
@@ -167,7 +260,7 @@ $dataIssueAlerts = @(
         }
 )
 
-Write-Host "DeployReport summary:"
+Write-Host "DeployReport diagnostic summary:"
 Write-Host "  Operations found:       $($operations.Count)"
 Write-Host "  Meaningful changes:     $($meaningfulOperations.Count)"
 Write-Host "  Table rebuilds:         $($tableRebuildOperations.Count)"
@@ -176,25 +269,7 @@ Write-Host "  Data issue alerts:      $($dataIssueAlerts.Count)"
 Write-Host ""
 
 # ============================================================
-# 6. CLEAN
-# ============================================================
-
-if (
-    $meaningfulOperations.Count -eq 0 -and
-    $dataIssueAlerts.Count -eq 0
-) {
-    Write-Host "========================================"
-    Write-Host "NO SCHEMA DRIFT DETECTED"
-    Write-Host "========================================"
-    Write-Host ""
-    Write-Host "The actual SQL Server schema matches"
-    Write-Host "the schema represented by the Git DACPAC."
-
-    exit 0
-}
-
-# ============================================================
-# 7. Generate deployment script
+# 9. Generate deployment script
 #
 # We use SqlPackage only to generate the deployment plan.
 # We do NOT use regex to parse it.
@@ -227,7 +302,7 @@ Write-Host "Deployment script generated successfully."
 Write-Host ""
 
 # ============================================================
-# 8. Get actual SQL Server columns
+# 10. Get actual SQL Server columns
 # ============================================================
 
 function Get-ActualColumns {
@@ -278,7 +353,7 @@ ORDER BY ORDINAL_POSITION;
 }
 
 # ============================================================
-# 9. Find tables that SqlPackage wants to rebuild
+# 11. Find tables that SqlPackage wants to rebuild
 # ============================================================
 
 $rebuildTables = @()
@@ -311,7 +386,7 @@ foreach ($operation in $tableRebuildOperations) {
 }
 
 # ============================================================
-# 10. Read deployment script line by line
+# 12. Read deployment script line by line
 #
 # We only inspect CREATE TABLE statements generated by
 # SqlPackage for temporary rebuild tables.
@@ -442,7 +517,7 @@ foreach ($key in $expectedColumnsByTable.Keys) {
 
 Write-Host ""
 # ============================================================
-# 11. Compare expected DACPAC columns with actual database
+# 13. Compare expected DACPAC columns with actual database
 # ============================================================
 
 $missingColumns = @()
@@ -503,7 +578,7 @@ foreach ($table in $rebuildTables) {
 }
 
 # ============================================================
-# 12. Display drift details
+# 14. Display drift details
 # ============================================================
 
 Write-Host "========================================"
@@ -602,7 +677,7 @@ if ($dataIssueAlerts.Count -gt 0) {
 }
 
 # ============================================================
-# 13. Dependency operations
+# 15. Dependency operations
 # ============================================================
 
 $dependencyCount = 0
@@ -631,7 +706,7 @@ if ($dependencyCount -gt 0) {
 }
 
 # ============================================================
-# 14. Exit code
+# 16. Exit code
 # ============================================================
 
 exit 10
