@@ -1,56 +1,55 @@
+[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$Server,
 
-    [string]$Database = "HealthcareCICD",
+    [Parameter(Mandatory = $true)]
+    [string]$Database,
 
-    [string]$OutputPath = ""
+    [string]$DacpacPath = ".\database\project\HealthcareCICD.Database\bin\Debug\HealthcareCICD.Database.dacpac",
+
+    [string]$OutputPath = ".\drift-report.xml",
+
+    [string]$DeployScriptPath = ".\current-deploy.sql"
 )
 
 $ErrorActionPreference = "Stop"
 
-# ============================================================
-# SQL Server Schema Drift Detection
-#
-# Exit Codes:
-#
-#   0  = No schema drift detected
-#   10 = Schema drift detected
-#   1  = Technical error
-#
-# DriftReport detects changes made to the registered database
-# since the last successful DAC registration.
-# ============================================================
-
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
-
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $ProjectRoot "drift-report.xml"
-}
-
 Write-Host "========================================"
 Write-Host "SQL Server Schema Drift Detection"
 Write-Host "========================================"
-Write-Host "Server:   $Server"
-Write-Host "Database: $Database"
-Write-Host "Report:   $OutputPath"
+Write-Host "Server:       $Server"
+Write-Host "Database:     $Database"
+Write-Host "DACPAC:       $DacpacPath"
+Write-Host "Report:       $OutputPath"
+Write-Host "DeployScript: $DeployScriptPath"
 Write-Host ""
 
-# ------------------------------------------------------------
-# Verify SqlPackage
-# ------------------------------------------------------------
+# ============================================================
+# 1. Validate tools
+# ============================================================
 
-if (-not (Get-Command sqlpackage -ErrorAction SilentlyContinue)) {
+$sqlPackage = Get-Command sqlpackage -ErrorAction SilentlyContinue
+
+if (-not $sqlPackage) {
     Write-Error "SqlPackage was not found in PATH."
     exit 1
 }
 
 Write-Host "SqlPackage found."
-Write-Host ""
 
-# ------------------------------------------------------------
-# Verify credentials
-# ------------------------------------------------------------
+$sqlcmd = Get-Command sqlcmd -ErrorAction SilentlyContinue
+
+if (-not $sqlcmd) {
+    Write-Error "sqlcmd was not found in PATH."
+    exit 1
+}
+
+Write-Host "sqlcmd found."
+
+# ============================================================
+# 2. Validate credentials
+# ============================================================
 
 if ([string]::IsNullOrWhiteSpace($env:SQL_USERNAME)) {
     Write-Error "SQL_USERNAME environment variable is not set."
@@ -63,277 +62,576 @@ if ([string]::IsNullOrWhiteSpace($env:SQL_PASSWORD)) {
 }
 
 Write-Host "SQL credentials are available."
+
+# ============================================================
+# 3. Validate DACPAC
+# ============================================================
+
+if (-not (Test-Path $DacpacPath)) {
+    Write-Error "DACPAC not found: $DacpacPath"
+    exit 1
+}
+
+$resolvedDacpac = (Resolve-Path $DacpacPath).Path
+
+Write-Host "DACPAC found."
 Write-Host ""
 
-# ------------------------------------------------------------
-# Remove old report
-# ------------------------------------------------------------
+# ============================================================
+# 4. Generate DeployReport
+# ============================================================
+
+Write-Host "Generating SQL Server DeployReport..."
+Write-Host ""
 
 if (Test-Path $OutputPath) {
     Remove-Item $OutputPath -Force
 }
 
-# ------------------------------------------------------------
-# Generate DriftReport
-# ------------------------------------------------------------
+& sqlpackage `
+    /Action:DeployReport `
+    /SourceFile:"$resolvedDacpac" `
+    /TargetServerName:"$Server" `
+    /TargetDatabaseName:"$Database" `
+    /TargetUser:"$env:SQL_USERNAME" `
+    /TargetPassword:"$env:SQL_PASSWORD" `
+    /TargetTrustServerCertificate:True `
+    /OutputPath:"$OutputPath"
 
-Write-Host "Generating SQL Server DriftReport..."
-Write-Host ""
-
-try {
-    sqlpackage `
-        /Action:DriftReport `
-        /TargetServerName:"$Server" `
-        /TargetDatabaseName:"$Database" `
-        /TargetUser:"$env:SQL_USERNAME" `
-        /TargetPassword:"$env:SQL_PASSWORD" `
-        /TargetTrustServerCertificate:True `
-        /OutputPath:"$OutputPath"
-
-    $SqlPackageExitCode = $LASTEXITCODE
-}
-catch {
-    Write-Error "Failed to execute SqlPackage."
-    Write-Error $_.Exception.Message
-    exit 1
-}
-
-if ($SqlPackageExitCode -ne 0) {
-    Write-Error "SqlPackage DriftReport failed."
-    exit 1
-}
-
-if (-not (Test-Path $OutputPath)) {
-    Write-Error "DriftReport was not created."
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "SqlPackage DeployReport failed."
     exit 1
 }
 
 Write-Host ""
-Write-Host "DriftReport generated successfully."
+Write-Host "DeployReport generated successfully."
 Write-Host ""
 
-# ------------------------------------------------------------
-# Parse XML
-# ------------------------------------------------------------
+# ============================================================
+# 5. Read DeployReport XML
+# ============================================================
 
-try {
-    [xml]$DriftXml = Get-Content `
-        -Path $OutputPath `
-        -Raw
-}
-catch {
-    Write-Error "The DriftReport is not valid XML."
-    exit 1
-}
+[xml]$reportXml = Get-Content -Path $OutputPath -Raw
 
-try {
-    $Additions = @(
-        $DriftXml.SelectNodes(
-            "//*[local-name()='Additions']/*"
-        )
+$namespace = New-Object System.Xml.XmlNamespaceManager($reportXml.NameTable)
+
+$namespace.AddNamespace(
+    "d",
+    "http://schemas.microsoft.com/sqlserver/dac/DeployReport/2012/02"
+)
+
+$operations = @(
+    $reportXml.SelectNodes(
+        "//d:Operations/d:Operation",
+        $namespace
     )
+)
 
-    $Removals = @(
-        $DriftXml.SelectNodes(
-            "//*[local-name()='Removals']/*"
-        )
+$alerts = @(
+    $reportXml.SelectNodes(
+        "//d:Alerts/d:Alert",
+        $namespace
     )
+)
 
-    $RawModifications = @(
-        $DriftXml.SelectNodes(
-            "//*[local-name()='Modifications']/*"
-        )
-    )
-}
-catch {
-    Write-Error "Failed to analyze DriftReport XML."
-    Write-Error $_.Exception.Message
-    exit 1
-}
-
-# ------------------------------------------------------------
-# Normalize modifications
-#
-# SqlPackage may report both:
-#
-#   Addition:
-#       [ManualDriftColumn]
-#
-#   Modification:
-#       [Patients]
-#
-# The table modification is a consequence of the column change.
-#
-# We do not count a parent table modification when that table
-# already has an addition/removal underneath it.
-# ------------------------------------------------------------
-
-$Modifications = @()
-
-foreach ($Modification in $RawModifications) {
-
-    $ModificationName = $Modification.GetAttribute("Name")
-    $ModificationParent = $Modification.GetAttribute("Parent")
-
-    $IsParentOfAddition = $false
-    $IsParentOfRemoval = $false
-
-    foreach ($Addition in $Additions) {
-
-        $AdditionParent = $Addition.GetAttribute("Parent")
-
-        if (
-            -not [string]::IsNullOrWhiteSpace($AdditionParent) -and
-            $AdditionParent -eq "$ModificationParent.$ModificationName"
-        ) {
-            $IsParentOfAddition = $true
-            break
+$tableRebuildOperations = @(
+    $operations |
+        Where-Object {
+            $_.Name -eq "TableRebuild"
         }
-    }
+)
 
-    foreach ($Removal in $Removals) {
-
-        $RemovalParent = $Removal.GetAttribute("Parent")
-
-        if (
-            -not [string]::IsNullOrWhiteSpace($RemovalParent) -and
-            $RemovalParent -eq "$ModificationParent.$ModificationName"
-        ) {
-            $IsParentOfRemoval = $true
-            break
+$meaningfulOperations = @(
+    $operations |
+        Where-Object {
+            $_.Name -in @(
+                "Create",
+                "Alter",
+                "Drop",
+                "TableRebuild"
+            )
         }
-    }
+)
 
-    if (-not $IsParentOfAddition -and -not $IsParentOfRemoval) {
-        $Modifications += $Modification
-    }
-}
+$dataMotionAlerts = @(
+    $alerts |
+        Where-Object {
+            $_.Name -eq "DataMotion"
+        }
+)
 
-# ------------------------------------------------------------
-# Counts
-# ------------------------------------------------------------
+$dataIssueAlerts = @(
+    $alerts |
+        Where-Object {
+            $_.Name -eq "DataIssue"
+        }
+)
 
-$AdditionCount = $Additions.Count
-$RemovalCount = $Removals.Count
-$ModificationCount = $Modifications.Count
-
-$TotalDrift = `
-    $AdditionCount +
-    $RemovalCount +
-    $ModificationCount
-
-# ------------------------------------------------------------
-# Summary
-# ------------------------------------------------------------
-
-Write-Host "Drift report summary:"
-Write-Host "  Additions:      $AdditionCount"
-Write-Host "  Removals:       $RemovalCount"
-Write-Host "  Modifications:  $ModificationCount"
+Write-Host "DeployReport summary:"
+Write-Host "  Operations found:       $($operations.Count)"
+Write-Host "  Meaningful changes:     $($meaningfulOperations.Count)"
+Write-Host "  Table rebuilds:         $($tableRebuildOperations.Count)"
+Write-Host "  Data motion alerts:     $($dataMotionAlerts.Count)"
+Write-Host "  Data issue alerts:      $($dataIssueAlerts.Count)"
 Write-Host ""
 
-# ------------------------------------------------------------
-# No drift
-# ------------------------------------------------------------
+# ============================================================
+# 6. CLEAN
+# ============================================================
 
-if ($TotalDrift -eq 0) {
-
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "NO SCHEMA DRIFT DETECTED" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Green
+if (
+    $meaningfulOperations.Count -eq 0 -and
+    $dataIssueAlerts.Count -eq 0
+) {
+    Write-Host "========================================"
+    Write-Host "NO SCHEMA DRIFT DETECTED"
+    Write-Host "========================================"
     Write-Host ""
-
-    Write-Host "The registered database has not changed"
-    Write-Host "since the last successful registration."
-    Write-Host ""
+    Write-Host "The actual SQL Server schema matches"
+    Write-Host "the schema represented by the Git DACPAC."
 
     exit 0
 }
 
-# ------------------------------------------------------------
-# Drift detected
-# ------------------------------------------------------------
+# ============================================================
+# 7. Generate deployment script
+#
+# We use SqlPackage only to generate the deployment plan.
+# We do NOT use regex to parse it.
+# ============================================================
 
-Write-Host "========================================" -ForegroundColor Red
-Write-Host "SCHEMA DRIFT DETECTED" -ForegroundColor Red
-Write-Host "========================================" -ForegroundColor Red
+Write-Host "Generating deployment script for detailed schema comparison..."
+Write-Host ""
+
+if (Test-Path $DeployScriptPath) {
+    Remove-Item $DeployScriptPath -Force
+}
+
+& sqlpackage `
+    /Action:Script `
+    /SourceFile:"$resolvedDacpac" `
+    /TargetServerName:"$Server" `
+    /TargetDatabaseName:"$Database" `
+    /TargetUser:"$env:SQL_USERNAME" `
+    /TargetPassword:"$env:SQL_PASSWORD" `
+    /TargetTrustServerCertificate:True `
+    /OutputPath:"$DeployScriptPath" `
+    /p:BlockOnPossibleDataLoss=False
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "SqlPackage deployment script generation failed."
+    exit 1
+}
+
+Write-Host "Deployment script generated successfully."
+Write-Host ""
+
+# ============================================================
+# 8. Get actual SQL Server columns
+# ============================================================
+
+function Get-ActualColumns {
+    param(
+        [string]$SchemaName,
+        [string]$TableName
+    )
+
+    $query = @"
+SET NOCOUNT ON;
+
+SELECT
+    COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = '$SchemaName'
+  AND TABLE_NAME = '$TableName'
+ORDER BY ORDINAL_POSITION;
+"@
+
+    $result = & sqlcmd `
+        -S $Server `
+        -d $Database `
+        -U "$env:SQL_USERNAME" `
+        -P "$env:SQL_PASSWORD" `
+        -C `
+        -h -1 `
+        -W `
+        -Q $query
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query SQL Server columns for [$SchemaName].[$TableName]."
+    }
+
+    $columns = @()
+
+    foreach ($line in $result) {
+
+        $columnName = $line.ToString().Trim()
+
+        if ([string]::IsNullOrWhiteSpace($columnName)) {
+            continue
+        }
+
+        $columns += $columnName
+    }
+
+    return $columns
+}
+
+# ============================================================
+# 9. Find tables that SqlPackage wants to rebuild
+# ============================================================
+
+$rebuildTables = @()
+
+foreach ($operation in $tableRebuildOperations) {
+
+    foreach ($item in $operation.Item) {
+
+        if ($item.Type -eq "SqlTable") {
+
+            $value = [string]$item.Value
+
+            # Expected format:
+            # [dbo].[Patients]
+
+            $parts = $value.Split('.')
+
+            if ($parts.Count -eq 2) {
+
+                $schemaName = $parts[0].Trim('[', ']')
+                $tableName = $parts[1].Trim('[', ']')
+
+                $rebuildTables += [PSCustomObject]@{
+                    Schema = $schemaName
+                    Table  = $tableName
+                }
+            }
+        }
+    }
+}
+
+# ============================================================
+# 10. Read deployment script line by line
+#
+# We only inspect CREATE TABLE statements generated by
+# SqlPackage for temporary rebuild tables.
+# No Regex is used.
+# ============================================================
+
+$scriptLines = Get-Content -Path $DeployScriptPath
+
+$expectedColumnsByTable = @{}
+
+$insideCreateTable = $false
+$currentTableKey = $null
+
+foreach ($line in $scriptLines) {
+
+    $trimmed = $line.Trim()
+
+    # --------------------------------------------------------
+    # Detect CREATE TABLE
+    # Example:
+    #
+    # CREATE TABLE [dbo].[tmp_ms_xx_Patients] (
+    # --------------------------------------------------------
+
+    if ($trimmed.StartsWith("CREATE TABLE [")) {
+
+        $openParen = $trimmed.IndexOf("(")
+
+        if ($openParen -gt 0) {
+
+            $tablePart = $trimmed.Substring(
+                "CREATE TABLE ".Length,
+                $openParen - "CREATE TABLE ".Length
+            ).Trim()
+
+            # Remove [ and ]
+            $tablePart = $tablePart.Replace("[", "")
+            $tablePart = $tablePart.Replace("]", "")
+
+            $tableParts = $tablePart.Split(".")
+
+            if ($tableParts.Count -eq 2) {
+
+                $schemaName = $tableParts[0].Trim()
+                $tempTableName = $tableParts[1].Trim()
+
+                if ($tempTableName.StartsWith("tmp_ms_xx_")) {
+
+                    $realTableName = $tempTableName.Substring(
+                        "tmp_ms_xx_".Length
+                    )
+
+                    $currentTableKey = "$schemaName.$realTableName"
+
+                    $expectedColumnsByTable[$currentTableKey] = @()
+
+                    $insideCreateTable = $true
+
+                    continue
+                }
+            }
+        }
+    }
+
+    # --------------------------------------------------------
+    # Read columns inside CREATE TABLE
+    # --------------------------------------------------------
+
+    if ($insideCreateTable) {
+
+        # End of CREATE TABLE
+        if ($trimmed -eq ");") {
+
+            $insideCreateTable = $false
+            $currentTableKey = $null
+
+            continue
+        }
+
+        # Ignore constraints
+        if ($trimmed.StartsWith("CONSTRAINT ")) {
+            continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($trimmed)) {
+            continue
+        }
+
+        # Column lines start with [
+        #
+        # Example:
+        #
+        # [EmergencyContactName] NVARCHAR (100) NULL,
+        #
+
+        if ($trimmed.StartsWith("[")) {
+
+            $closingBracket = $trimmed.IndexOf("]")
+
+            if ($closingBracket -gt 1) {
+
+                $columnName = $trimmed.Substring(
+                    1,
+                    $closingBracket - 1
+                )
+
+                if (-not $columnName.StartsWith("tmp_ms_xx_")) {
+
+                    $expectedColumnsByTable[$currentTableKey] += $columnName
+                }
+            }
+        }
+    }
+}
+
+# Debug information
+Write-Host "Expected DACPAC columns found in deployment script:"
+
+foreach ($key in $expectedColumnsByTable.Keys) {
+
+    Write-Host "  Table: [$($key.Replace('.', '].['))]"
+
+    foreach ($column in $expectedColumnsByTable[$key]) {
+
+        Write-Host "    $column"
+    }
+}
+
+Write-Host ""
+# ============================================================
+# 11. Compare expected DACPAC columns with actual database
+# ============================================================
+
+$missingColumns = @()
+$unexpectedColumns = @()
+
+foreach ($table in $rebuildTables) {
+
+    $tableKey = "$($table.Schema).$($table.Table)"
+
+    if (-not $expectedColumnsByTable.ContainsKey($tableKey)) {
+
+        Write-Warning "Could not find expected table definition for [$($table.Schema)].[$($table.Table)]."
+
+        continue
+    }
+
+    $expectedColumns = @(
+        $expectedColumnsByTable[$tableKey]
+    )
+
+    $actualColumns = @(
+        Get-ActualColumns `
+            -SchemaName $table.Schema `
+            -TableName $table.Table
+    )
+
+    # --------------------------------------------------------
+    # Expected in DACPAC but missing in SQL Server
+    # --------------------------------------------------------
+
+    foreach ($expectedColumn in $expectedColumns) {
+
+        if ($expectedColumn -notin $actualColumns) {
+
+            $missingColumns += [PSCustomObject]@{
+                Schema = $table.Schema
+                Table  = $table.Table
+                Column = $expectedColumn
+            }
+        }
+    }
+
+    # --------------------------------------------------------
+    # Exists in SQL Server but not in DACPAC
+    # --------------------------------------------------------
+
+    foreach ($actualColumn in $actualColumns) {
+
+        if ($actualColumn -notin $expectedColumns) {
+
+            $unexpectedColumns += [PSCustomObject]@{
+                Schema = $table.Schema
+                Table  = $table.Table
+                Column = $actualColumn
+            }
+        }
+    }
+}
+
+# ============================================================
+# 12. Display drift details
+# ============================================================
+
+Write-Host "========================================"
+Write-Host "SCHEMA DRIFT DETECTED"
+Write-Host "========================================"
+Write-Host ""
+
+Write-Host "The actual SQL Server database differs"
+Write-Host "from the schema represented by the Git DACPAC."
 Write-Host ""
 
 # ------------------------------------------------------------
-# Additions
+# Missing columns
 # ------------------------------------------------------------
 
-if ($AdditionCount -gt 0) {
+if ($missingColumns.Count -gt 0) {
 
-    Write-Host "Additions:" -ForegroundColor Yellow
+    Write-Host "Columns missing from SQL Server:"
 
-    foreach ($Object in $Additions) {
+    foreach ($column in $missingColumns) {
 
-        $Name = $Object.GetAttribute("Name")
-        $Parent = $Object.GetAttribute("Parent")
-        $Type = $Object.GetAttribute("Type")
-
-        Write-Host "  + Name:   $Name"
-        Write-Host "    Parent: $Parent"
-        Write-Host "    Type:   $Type"
+        Write-Host "  [$($column.Schema)].[$($column.Table)].[$($column.Column)]"
     }
 
     Write-Host ""
 }
 
 # ------------------------------------------------------------
-# Removals
+# Unexpected columns
 # ------------------------------------------------------------
 
-if ($RemovalCount -gt 0) {
+if ($unexpectedColumns.Count -gt 0) {
 
-    Write-Host "Removals:" -ForegroundColor Yellow
+    Write-Host "Unexpected columns in SQL Server:"
 
-    foreach ($Object in $Removals) {
+    foreach ($column in $unexpectedColumns) {
 
-        $Name = $Object.GetAttribute("Name")
-        $Parent = $Object.GetAttribute("Parent")
-        $Type = $Object.GetAttribute("Type")
-
-        Write-Host "  - Name:   $Name"
-        Write-Host "    Parent: $Parent"
-        Write-Host "    Type:   $Type"
+        Write-Host "  [$($column.Schema)].[$($column.Table)].[$($column.Column)]"
     }
 
     Write-Host ""
 }
 
 # ------------------------------------------------------------
-# Independent modifications
+# Table rebuilds
 # ------------------------------------------------------------
 
-if ($ModificationCount -gt 0) {
+if ($rebuildTables.Count -gt 0) {
 
-    Write-Host "Modifications:" -ForegroundColor Yellow
+    Write-Host "Table rebuilds:"
 
-    foreach ($Object in $Modifications) {
+    foreach ($table in $rebuildTables) {
 
-        $Name = $Object.GetAttribute("Name")
-        $Parent = $Object.GetAttribute("Parent")
-        $Type = $Object.GetAttribute("Type")
-
-        Write-Host "  ~ Name:   $Name"
-        Write-Host "    Parent: $Parent"
-        Write-Host "    Type:   $Type"
+        Write-Host "  Table: [$($table.Schema)].[$($table.Table)]"
     }
 
     Write-Host ""
 }
 
 # ------------------------------------------------------------
-# Final result
+# Data motion
 # ------------------------------------------------------------
 
-Write-Host "Drift report:"
-Write-Host $OutputPath
-Write-Host ""
+if ($dataMotionAlerts.Count -gt 0) {
 
-Write-Host "CI/CD deployment should stop."
-Write-Host ""
+    Write-Host "Data motion:"
+
+    foreach ($alert in $dataMotionAlerts) {
+
+        foreach ($issue in $alert.Issue) {
+
+            Write-Host "  $($issue.Value)"
+        }
+    }
+
+    Write-Host ""
+}
+
+# ------------------------------------------------------------
+# Data issues
+# ------------------------------------------------------------
+
+if ($dataIssueAlerts.Count -gt 0) {
+
+    Write-Host "Data issues:"
+
+    foreach ($alert in $dataIssueAlerts) {
+
+        foreach ($issue in $alert.Issue) {
+
+            Write-Host "  $($issue.Value)"
+        }
+    }
+
+    Write-Host ""
+}
+
+# ============================================================
+# 13. Dependency operations
+# ============================================================
+
+$dependencyCount = 0
+
+foreach ($operation in $operations) {
+
+    foreach ($item in $operation.Item) {
+
+        if ($item.Type -in @(
+            "SqlDefaultConstraint",
+            "SqlForeignKeyConstraint",
+            "SqlIndex"
+        )) {
+
+            $dependencyCount++
+        }
+    }
+}
+
+if ($dependencyCount -gt 0) {
+
+    Write-Host "Dependency operations ignored:"
+    Write-Host "  $dependencyCount constraint/index operations"
+    Write-Host "  were treated as implementation details of schema changes."
+    Write-Host ""
+}
+
+# ============================================================
+# 14. Exit code
+# ============================================================
 
 exit 10

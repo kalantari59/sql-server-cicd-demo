@@ -27,3 +27,10 @@ publish-diagnostics.log
 # OS files
 .DS_Store
 Thumbs.db
+
+# SQL Database Project generated files
+*.dbmdl
+*.jfm
+
+# Temporary deployment script
+drift-deployment-script.sql
