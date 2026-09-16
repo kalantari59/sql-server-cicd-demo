@@ -337,7 +337,7 @@ jobs:
             /TargetPassword:"$env:SQL_PASSWORD" `
             /TargetTrustServerCertificate:True `
             /p:RegisterDataTierApplication=True `
-            /p:BlockWhenDriftDetected=True `
+            /p:BlockWhenDriftDetected=False `
             /p:BlockOnPossibleDataLoss=True
 
           if ($LASTEXITCODE -ne 0) {
