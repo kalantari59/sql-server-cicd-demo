@@ -22,26 +22,34 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Verify SQL Project
+        shell: powershell
+        run: |
+          $project = "database/project/HealthcareCICD.Database/HealthcareCICD.Database.sqlproj"
+
+          if (-not (Test-Path $project)) {
+              Write-Error "SQL Database Project not found: $project"
+          }
+
+          Write-Host "SQL project found:"
+          Write-Host $project
+
       - name: Build SQL Database Project
         shell: powershell
         run: |
           msbuild `
-            "database/project/HealthcareCICD.Database/HealthcareCICD.Database/HealthcareCICD.Database.sqlproj" `
-            /p:Configuration=Release `
+            "database/project/HealthcareCICD.Database/HealthcareCICD.Database.sqlproj" `
+            /p:Configuration=Debug `
             /p:Platform="Any CPU"
 
       - name: Verify DACPAC
         shell: powershell
         run: |
-          $dacpac = Get-ChildItem `
-            -Path "database/project/HealthcareCICD.Database/HealthcareCICD.Database/bin/Release" `
-            -Filter "*.dacpac" `
-            -Recurse
+          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
 
-          if ($dacpac.Count -eq 0) {
-              Write-Error "DACPAC was not generated."
+          if (-not (Test-Path $dacpac)) {
+              Write-Error "DACPAC was not generated: $dacpac"
           }
 
-          foreach ($file in $dacpac) {
-              Write-Host "DACPAC generated: $($file.FullName)"
-          }
+          Write-Host "DACPAC generated successfully:"
+          Write-Host $dacpac
