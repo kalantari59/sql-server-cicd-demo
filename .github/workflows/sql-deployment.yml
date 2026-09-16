@@ -89,19 +89,40 @@ jobs:
       - name: Verify DACPAC
         shell: powershell
         run: |
-          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
+          $expected = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
 
-          if (-not (Test-Path $dacpac)) {
-              Write-Error "DACPAC was not generated: $dacpac"
+          Write-Host "Expected DACPAC path:"
+          Write-Host $expected
+
+          Write-Host ""
+          Write-Host "Searching for DACPAC files..."
+
+          $dacpacs = Get-ChildItem `
+            -Path "database/project" `
+            -Filter "*.dacpac" `
+            -Recurse `
+            -ErrorAction SilentlyContinue
+
+          if ($dacpacs.Count -eq 0) {
+              Write-Error "No DACPAC file was found under database/project."
               exit 1
           }
 
-          Write-Host "DACPAC found:"
-          Write-Host $dacpac
+          Write-Host ""
+          Write-Host "DACPAC files found:"
 
-          $size = (Get-Item $dacpac).Length
-          Write-Host "DACPAC size: $size bytes"
-          
+          foreach ($file in $dacpacs) {
+              Write-Host " - $($file.FullName)"
+              Write-Host "   Size: $($file.Length) bytes"
+          }
+
+          if (-not (Test-Path $expected)) {
+              Write-Error "Expected DACPAC was not found: $expected"
+              exit 1
+          }
+
+          Write-Host ""
+          Write-Host "Expected DACPAC found successfully."
       # ======================================================
       # Temporary SQL Connection Test
       # ======================================================
