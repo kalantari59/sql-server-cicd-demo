@@ -69,7 +69,25 @@ jobs:
             -Server "${{ secrets.SQL_SERVER }}" `
             -Database "${{ secrets.SQL_DATABASE }}" `
             -DacpacPath $dacpac
+      
+      - name: Verify deployment permissions
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+          $env:SQLCMDPASSWORD = $env:SQL_PASSWORD
 
+          sqlcmd `
+            -S "${{ secrets.SQL_SERVER }}" `
+            -d "${{ secrets.SQL_DATABASE }}" `
+            -U "$env:SQL_USERNAME" `
+            -Q "SELECT SUSER_SNAME() AS LoginName, USER_NAME() AS DatabaseUser, DB_NAME() AS DatabaseName, IS_SRVROLEMEMBER('sysadmin') AS IsSysAdmin, IS_MEMBER('db_owner') AS IsDbOwner;"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "SQL authentication or connectivity test failed."
+              exit 1
+          }
       - name: Deploy DACPAC
         shell: powershell
         env:
