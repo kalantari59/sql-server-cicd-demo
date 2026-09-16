@@ -101,6 +101,7 @@ jobs:
 
           $size = (Get-Item $dacpac).Length
           Write-Host "DACPAC size: $size bytes"
+          
       # ======================================================
       # Temporary SQL Connection Test
       # ======================================================
