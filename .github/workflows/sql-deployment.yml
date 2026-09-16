@@ -99,7 +99,33 @@ jobs:
 
           Write-Host "DACPAC generated successfully:"
           Write-Host $dacpac
+      # ======================================================
+      # Temporary SQL Connection Test
+      # ======================================================
 
+      - name: Test SQL connection
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+          Write-Host "Testing SQL connection..."
+
+          sqlcmd `
+            -S "${{ secrets.SQL_SERVER }}" `
+            -d "${{ secrets.SQL_DATABASE }}" `
+            -U "$env:SQL_USERNAME" `
+            -P "$env:SQL_PASSWORD" `
+            -C `
+            -b `
+            -Q "SELECT @@SERVERNAME AS ServerName, DB_NAME() AS DatabaseName, SUSER_SNAME() AS LoginName;"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "SQL connection test failed."
+              exit 1
+          }
+
+          Write-Host "SQL connection test succeeded."
 
       # ======================================================
       # 7. Detect Schema Drift
