@@ -80,21 +80,24 @@ jobs:
 
           if (-not (Test-Path $dacpac)) {
               Write-Error "DACPAC not found: $dacpac"
+              exit 1
           }
 
           Write-Host "Deploying DACPAC:"
           Write-Host $dacpac
 
-          $connectionString = "Server=${{ secrets.SQL_SERVER }};Database=${{ secrets.SQL_DATABASE }};User ID=$env:SQL_USERNAME;Password=$env:SQL_PASSWORD;TrustServerCertificate=True"
-
           sqlpackage `
             /Action:Publish `
             /SourceFile:"$dacpac" `
-            /TargetConnectionString:"$connectionString"
+            /TargetServerName:"${{ secrets.SQL_SERVER }}" `
+            /TargetDatabaseName:"${{ secrets.SQL_DATABASE }}" `
+            /TargetUser:"$env:SQL_USERNAME" `
+            /TargetPassword:"$env:SQL_PASSWORD" `
+            /TargetTrustServerCertificate:True
 
           if ($LASTEXITCODE -ne 0) {
               Write-Error "DACPAC deployment failed."
               exit 1
           }
 
-          Write-Host "DACPAC deployment completed successfully."            
+          Write-Host "DACPAC deployment completed successfully."         
