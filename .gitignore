@@ -8,9 +8,9 @@ bin/
 obj/
 
 # DACPAC / deployment artifacts
-*.dacpac
 *.bacpac
 *.publish.xml
+*.dacpac
 
 # SQLPackage / debugging output
 *.log
