@@ -2,383 +2,153 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Server,
 
-    [string]$Database = "HealthcareCICD"
+    [string]$Database = "HealthcareCICD",
+
+    [string]$DacpacPath = "",
+
+    [string]$OutputPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$TablePath = Join-Path $ProjectRoot "database\tables"
-$ProcedurePath = Join-Path $ProjectRoot "database\procedures"
+
+# Default DACPAC location
+if ([string]::IsNullOrWhiteSpace($DacpacPath)) {
+    $DacpacPath = Join-Path `
+        $ProjectRoot `
+        "database\project\HealthcareCICD.Database\HealthcareCICD.Database\bin\Debug\HealthcareCICD.Database.dacpac"
+}
+
+# Default deployment plan location
+if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+    $OutputPath = Join-Path `
+        $ProjectRoot `
+        "schema-drift-check.sql"
+}
 
 Write-Host "========================================"
 Write-Host "SQL Server Schema Drift Detection"
 Write-Host "========================================"
 Write-Host "Server:   $Server"
 Write-Host "Database: $Database"
+Write-Host "DACPAC:   $DacpacPath"
 Write-Host ""
 
-function Invoke-SqlQuery {
-    param(
-        [string]$Query
-    )
+# --------------------------------------------------
+# Step 1 - Validate prerequisites
+# --------------------------------------------------
 
-    $Output = sqlcmd `
-        -S $Server `
-        -d $Database `
-        -E `
-        -h -1 `
-        -W `
-        -Q $Query
+if (-not (Test-Path $DacpacPath)) {
+    Write-Error "DACPAC not found: $DacpacPath"
+    exit 1
+}
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "SQL query failed."
-    }
-
-    return $Output
+if (-not (Get-Command sqlpackage -ErrorAction SilentlyContinue)) {
+    Write-Error "SqlPackage was not found in PATH."
+    exit 1
 }
 
 # --------------------------------------------------
-# 1. Read expected tables from Git
+# Step 2 - Generate deployment plan
 # --------------------------------------------------
 
-Write-Host "Reading expected tables from Git..."
+Write-Host "Generating deployment plan..."
 
-$ExpectedTables = @()
+$TargetConnectionString = `
+    "Server=$Server;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
 
-$TableFiles = Get-ChildItem $TablePath -Filter "*.sql" |
-    Sort-Object Name
+sqlpackage `
+    /Action:Script `
+    /SourceFile:"$DacpacPath" `
+    /TargetConnectionString:"$TargetConnectionString" `
+    /DeployScriptPath:"$OutputPath"
 
-foreach ($File in $TableFiles) {
-
-    $Content = Get-Content $File.FullName -Raw
-
-    $Match = [regex]::Match(
-        $Content,
-        '(?i)CREATE\s+TABLE\s+(?:\[dbo\]\.)?\[?([A-Za-z0-9_]+)\]?'
-    )
-
-    if ($Match.Success) {
-        $ExpectedTables += $Match.Groups[1].Value
-    }
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "SqlPackage failed while generating the deployment plan."
+    exit 1
 }
-
-$ExpectedTables = $ExpectedTables | Sort-Object -Unique
-
-Write-Host "Expected tables:"
-$ExpectedTables | ForEach-Object {
-    Write-Host "  $_"
-}
-
-# --------------------------------------------------
-# 2. Read actual tables from SQL Server
-# --------------------------------------------------
 
 Write-Host ""
-Write-Host "Reading actual tables from SQL Server..."
+Write-Host "Deployment plan generated:"
+Write-Host $OutputPath
 
-$TableQuery = @"
-SELECT t.name
-FROM sys.tables t
-INNER JOIN sys.schemas s
-    ON t.schema_id = s.schema_id
-WHERE s.name = 'dbo'
-ORDER BY t.name;
-"@
+# --------------------------------------------------
+# Step 3 - Read deployment plan
+# --------------------------------------------------
 
-$ActualTables = @(Invoke-SqlQuery $TableQuery |
-    Where-Object { $_.Trim() -ne "" } |
-    ForEach-Object { $_.Trim() })
-
-Write-Host "Actual tables:"
-$ActualTables | ForEach-Object {
-    Write-Host "  $_"
+if (-not (Test-Path $OutputPath)) {
+    Write-Error "Deployment plan was not created."
+    exit 1
 }
 
+$PlanContent = Get-Content $OutputPath -Raw
+
 # --------------------------------------------------
-# 3. Compare tables
+# Step 4 - Detect actual schema changes
 # --------------------------------------------------
 
-Write-Host ""
-Write-Host "Comparing tables..."
-
-$MissingTables = @(
-    Compare-Object `
-        -ReferenceObject $ExpectedTables `
-        -DifferenceObject $ActualTables `
-        -PassThru |
-        Where-Object {
-            $_ -in $ExpectedTables
-        }
+$SchemaPatterns = @(
+    "CREATE TABLE",
+    "ALTER TABLE",
+    "DROP TABLE",
+    "CREATE VIEW",
+    "ALTER VIEW",
+    "DROP VIEW",
+    "CREATE PROCEDURE",
+    "ALTER PROCEDURE",
+    "DROP PROCEDURE",
+    "CREATE FUNCTION",
+    "ALTER FUNCTION",
+    "DROP FUNCTION",
+    "ADD CONSTRAINT",
+    "DROP CONSTRAINT"
 )
 
-$UnexpectedTables = @(
-    Compare-Object `
-        -ReferenceObject $ExpectedTables `
-        -DifferenceObject $ActualTables `
-        -PassThru |
-        Where-Object {
-            $_ -in $ActualTables
-        }
-)
+$SchemaChanges = @()
 
-$DriftDetected = $false
+foreach ($Pattern in $SchemaPatterns) {
 
-if ($MissingTables.Count -gt 0) {
+    $Matches = Select-String `
+        -InputObject $PlanContent `
+        -Pattern $Pattern `
+        -AllMatches
 
-    $DriftDetected = $true
-
-    Write-Host ""
-    Write-Host "Missing tables detected:" -ForegroundColor Red
-
-    foreach ($Table in $MissingTables) {
-        Write-Host "  MISSING: $Table" -ForegroundColor Red
+    if ($Matches) {
+        $SchemaChanges += $Pattern
     }
-}
-
-if ($UnexpectedTables.Count -gt 0) {
-
-    $DriftDetected = $true
-
-    Write-Host ""
-    Write-Host "Unexpected tables detected:" -ForegroundColor Red
-
-    foreach ($Table in $UnexpectedTables) {
-        Write-Host "  UNEXPECTED: $Table" -ForegroundColor Red
-    }
-}
-
-if (-not $DriftDetected) {
-    Write-Host "PASS: Table structure matches Git." -ForegroundColor Green
 }
 
 # --------------------------------------------------
-# 4. Compare columns
+# Step 5 - Return CI/CD result
 # --------------------------------------------------
 
 Write-Host ""
-Write-Host "Checking columns..."
 
-$ExpectedColumns = @()
+if ($SchemaChanges.Count -gt 0) {
 
-foreach ($File in $TableFiles) {
-
-    $Content = Get-Content $File.FullName -Raw
-
-    $TableMatch = [regex]::Match(
-        $Content,
-        '(?i)CREATE\s+TABLE\s+(?:\[dbo\]\.)?\[?([A-Za-z0-9_]+)\]?'
-    )
-
-    if (-not $TableMatch.Success) {
-        continue
-    }
-
-    $TableName = $TableMatch.Groups[1].Value
-
-    $ColumnMatches = [regex]::Matches(
-        $Content,
-        '(?im)^\s*\[?([A-Za-z0-9_]+)\]?\s+' +
-        '\[?([A-Za-z0-9_]+)\]?' +
-        '(?:\(([^)]*)\))?\s+' +
-        '(?:NOT\s+NULL|NULL|IDENTITY)'
-    )
-
-    foreach ($ColumnMatch in $ColumnMatches) {
-
-        $ColumnName = $ColumnMatch.Groups[1].Value
-        $DataType = $ColumnMatch.Groups[2].Value
-        $Length = $ColumnMatch.Groups[3].Value
-
-        if ($ColumnName -notmatch '^(CONSTRAINT|PRIMARY|FOREIGN|UNIQUE|CHECK)$') {
-
-            $ExpectedColumns += [PSCustomObject]@{
-                TableName = $TableName
-                ColumnName = $ColumnName
-                DataType = $DataType.ToLower()
-                Length = $Length
-            }
-        }
-    }
-}
-
-$ColumnQuery = @"
-SELECT
-    t.name AS TableName,
-    c.name AS ColumnName,
-    ty.name AS DataType,
-    CASE
-        WHEN ty.name IN ('nvarchar', 'varchar', 'char', 'nchar')
-            THEN CAST(c.max_length AS VARCHAR(20))
-        ELSE ''
-    END AS Length
-FROM sys.tables t
-INNER JOIN sys.columns c
-    ON t.object_id = c.object_id
-INNER JOIN sys.types ty
-    ON c.user_type_id = ty.user_type_id
-INNER JOIN sys.schemas s
-    ON t.schema_id = s.schema_id
-WHERE s.name = 'dbo'
-ORDER BY t.name, c.column_id;
-"@
-
-$ActualColumns = @()
-
-$ColumnOutput = Invoke-SqlQuery $ColumnQuery
-
-foreach ($Line in $ColumnOutput) {
-
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        continue
-    }
-
-    $Parts = $Line.Trim() -split '\s+'
-
-    if ($Parts.Count -ge 3) {
-
-        $ActualColumns += [PSCustomObject]@{
-            TableName = $Parts[0]
-            ColumnName = $Parts[1]
-            DataType = $Parts[2].ToLower()
-            Length = if ($Parts.Count -ge 4) { $Parts[3] } else { "" }
-        }
-    }
-}
-
-foreach ($ExpectedColumn in $ExpectedColumns) {
-
-    $ActualColumn = $ActualColumns |
-        Where-Object {
-            $_.TableName -eq $ExpectedColumn.TableName -and
-            $_.ColumnName -eq $ExpectedColumn.ColumnName
-        }
-
-    if ($null -eq $ActualColumn) {
-
-        $DriftDetected = $true
-
-        Write-Host `
-            "MISSING COLUMN: $($ExpectedColumn.TableName).$($ExpectedColumn.ColumnName)" `
-            -ForegroundColor Red
-
-        continue
-    }
-
-    if ($ActualColumn.DataType -ne $ExpectedColumn.DataType) {
-
-        $DriftDetected = $true
-
-        Write-Host `
-            "DATA TYPE MISMATCH: $($ExpectedColumn.TableName).$($ExpectedColumn.ColumnName)" `
-            -ForegroundColor Red
-
-        Write-Host `
-            "  Expected: $($ExpectedColumn.DataType)" `
-            -ForegroundColor Yellow
-
-        Write-Host `
-            "  Actual:   $($ActualColumn.DataType)" `
-            -ForegroundColor Yellow
-    }
-}
-
-foreach ($ActualColumn in $ActualColumns) {
-
-    $ExpectedColumn = $ExpectedColumns |
-        Where-Object {
-            $_.TableName -eq $ActualColumn.TableName -and
-            $_.ColumnName -eq $ActualColumn.ColumnName
-        }
-
-    if ($null -eq $ExpectedColumn) {
-
-        $DriftDetected = $true
-
-        Write-Host `
-            "UNEXPECTED COLUMN: $($ActualColumn.TableName).$($ActualColumn.ColumnName)" `
-            -ForegroundColor Red
-    }
-}
-
-# --------------------------------------------------
-# 5. Check stored procedures
-# --------------------------------------------------
-
-Write-Host ""
-Write-Host "Checking stored procedures..."
-
-$ExpectedProcedures = @()
-
-if (Test-Path $ProcedurePath) {
-
-    $ProcedureFiles = Get-ChildItem $ProcedurePath -Filter "*.sql" |
-        Sort-Object Name
-
-    foreach ($File in $ProcedureFiles) {
-
-        $Content = Get-Content $File.FullName -Raw
-
-        $Match = [regex]::Match(
-            $Content,
-            '(?i)CREATE\s+(?:OR\s+ALTER\s+)?PROCEDURE\s+(?:\[dbo\]\.)?\[?([A-Za-z0-9_]+)\]?'
-        )
-
-        if ($Match.Success) {
-            $ExpectedProcedures += $Match.Groups[1].Value
-        }
-    }
-}
-
-$ProcedureQuery = @"
-SELECT p.name
-FROM sys.procedures p
-INNER JOIN sys.schemas s
-    ON p.schema_id = s.schema_id
-WHERE s.name = 'dbo'
-ORDER BY p.name;
-"@
-
-$ActualProcedures = @(Invoke-SqlQuery $ProcedureQuery |
-    Where-Object { $_.Trim() -ne "" } |
-    ForEach-Object { $_.Trim() })
-
-foreach ($Procedure in $ExpectedProcedures) {
-
-    if ($Procedure -notin $ActualProcedures) {
-
-        $DriftDetected = $true
-
-        Write-Host `
-            "MISSING PROCEDURE: $Procedure" `
-            -ForegroundColor Red
-    }
-}
-
-# --------------------------------------------------
-# 6. Final result
-# --------------------------------------------------
-
-Write-Host ""
-Write-Host "========================================"
-
-if ($DriftDetected) {
-
-    Write-Host `
-        "SCHEMA DRIFT DETECTED" `
-        -ForegroundColor Red
-
+    Write-Host "========================================" -ForegroundColor Red
+    Write-Host "SCHEMA DRIFT DETECTED" -ForegroundColor Red
     Write-Host "========================================"
+
+    Write-Host ""
+    Write-Host "Schema changes found in the deployment plan:"
+
+    foreach ($Change in $SchemaChanges) {
+        Write-Host "  - $Change" -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "The actual SQL Server schema differs from the DACPAC."
+    Write-Host "CI/CD deployment should stop."
 
     exit 1
 }
-else {
 
-    Write-Host `
-        "NO SCHEMA DRIFT DETECTED" `
-        -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "NO SCHEMA DRIFT DETECTED" -ForegroundColor Green
+Write-Host "========================================"
 
-    Write-Host "========================================"
+Write-Host "The actual SQL Server schema matches the DACPAC."
 
-    exit 0
-}
+exit 0
