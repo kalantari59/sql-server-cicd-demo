@@ -1,9 +1,0 @@
-﻿<DriftReport xmlns="http://schemas.microsoft.com/sqlserver/dac/DriftReport/2012/02">
-  <Additions>
-    <Object Name="[ManualDriftColumn]" Parent="[dbo].[Patients]" Type="SqlSimpleColumn" />
-  </Additions>
-  <Removals />
-  <Modifications>
-    <Object Name="[Patients]" Parent="[dbo]" Type="SqlTable" />
-  </Modifications>
-</DriftReport>

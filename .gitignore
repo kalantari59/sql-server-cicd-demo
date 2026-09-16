@@ -1,10 +1,29 @@
-.env
-*.bak
-*.mdf
-*.ndf
-*.ldf
-*.log
-.vscode/
+# Visual Studio
 .vs/
+*.user
+*.suo
+
+# SQL Database Project build output
+bin/
+obj/
+
+# DACPAC / deployment artifacts
+*.dacpac
+*.bacpac
+*.publish.xml
+
+# SQLPackage / debugging output
+*.log
+drift-report.xml
+current-drift.xml
+after-publish-drift.xml
+current-deploy.sql
+deploy-report.xml
+publish-diagnostics.log
+
+# Temporary files
+*.tmp
+
+# OS files
 .DS_Store
 Thumbs.db
