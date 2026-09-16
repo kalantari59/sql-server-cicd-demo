@@ -5,10 +5,6 @@ on:
     branches:
       - main
 
-  pull_request:
-    branches:
-      - main
-
 jobs:
   build:
     name: Build SQL Database Project
@@ -73,3 +69,32 @@ jobs:
             -Server "${{ secrets.SQL_SERVER }}" `
             -Database "${{ secrets.SQL_DATABASE }}" `
             -DacpacPath $dacpac
+
+      - name: Deploy DACPAC
+        shell: powershell
+        env:
+          SQL_USERNAME: ${{ secrets.SQL_USERNAME }}
+          SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+        run: |
+          $dacpac = "database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac"
+
+          if (-not (Test-Path $dacpac)) {
+              Write-Error "DACPAC not found: $dacpac"
+          }
+
+          Write-Host "Deploying DACPAC:"
+          Write-Host $dacpac
+
+          $connectionString = "Server=${{ secrets.SQL_SERVER }};Database=${{ secrets.SQL_DATABASE }};User ID=$env:SQL_USERNAME;Password=$env:SQL_PASSWORD;TrustServerCertificate=True"
+
+          sqlpackage `
+            /Action:Publish `
+            /SourceFile:"$dacpac" `
+            /TargetConnectionString:"$connectionString"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "DACPAC deployment failed."
+              exit 1
+          }
+
+          Write-Host "DACPAC deployment completed successfully."            
