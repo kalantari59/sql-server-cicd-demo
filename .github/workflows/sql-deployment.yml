@@ -53,3 +53,9 @@ jobs:
 
           Write-Host "DACPAC generated successfully:"
           Write-Host $dacpac
+
+      - name: Upload DACPAC artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HealthcareCICD-DACPAC
+          path: database/project/HealthcareCICD.Database/bin/Debug/HealthcareCICD.Database.dacpac
