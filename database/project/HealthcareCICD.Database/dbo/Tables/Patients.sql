@@ -7,6 +7,7 @@
     [LastName]    NVARCHAR (50)  NOT NULL,
     [DateOfBirth] DATE           NOT NULL,
     [Email]       NVARCHAR (255) NULL,
+    [Email12]       NVARCHAR (255) NULL,
     [IsActive]    BIT            CONSTRAINT [DF_Patients_IsActive] DEFAULT ((1)) NOT NULL,
     CONSTRAINT [PK_Patients] PRIMARY KEY CLUSTERED ([PatientId] ASC)
 );
