@@ -201,7 +201,6 @@ if ($driftObjects.Count -eq 0) {
 
 # ============================================================
 # 8. Generate DeployReport for detailed deployment diagnostics
-#
 # DriftReport above determines whether the target database has
 # changed outside the registered deployment baseline. DeployReport
 # below remains useful diagnostics for the current Git DACPAC and
